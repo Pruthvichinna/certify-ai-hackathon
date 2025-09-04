@@ -1,0 +1,11 @@
+# Git Ignore File
+
+# Ignore the Python virtual environment
+backend/venv/
+
+# Ignore IDE and OS files
+.vscode/
+__pycache__/
+
+# Ignore sensitive credential files
+backend/client_secret.json

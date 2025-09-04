@@ -4,28 +4,31 @@
 # ==============================================================================
 
 # --- Step 1: Import necessary libraries ---
-# Flask is for creating our web server.
-# request lets us handle incoming data (like the document text).
-# jsonify formats our output as JSON, a standard for APIs.
-# json is a built-in Python library to work with JSON data.
 import json
 import vertexai
 from flask import Flask, request, jsonify
 from vertexai.generative_models import GenerativeModel
+from google.cloud import firestore
+
+# New imports for Calendar Tool
+import datetime
+from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import Flow
+from googleapiclient.discovery import build
+
 
 # --- Step 2: Initialize the Flask App and Vertex AI ---
 app = Flask(__name__)
 
-# IMPORTANT: Replace these placeholders with your actual Google Cloud
-# project details. You can find your Project ID on the main dashboard
-# of the Google Cloud Console. Location can be something like
-# "us-central1" or "asia-south1".
+# Replace these placeholders with your actual Google Cloud project details.
 PROJECT_ID = "certify-ai-hackathon"  # <-- REPLACE WITH YOUR PROJECT ID
 LOCATION = "asia-south1"             # <-- REPLACE WITH YOUR GCP REGION
 
-# Initialize the Vertex AI SDK with your project details.
-# This connects our code to your Google Cloud project.
+# Initialize Vertex AI SDK
 vertexai.init(project=PROJECT_ID, location=LOCATION)
+
+# Initialize the Firestore DB client
+db = firestore.Client(project=PROJECT_ID)
 
 
 # --- Step 3: Define the Core AI Logic Function ---
@@ -33,18 +36,9 @@ def analyze_document_with_gemini(document_text: str) -> str:
     """
     Sends the document text to the Gemini model and returns
     a structured JSON analysis.
-
-    Args:
-        document_text: The full text of the legal document to be analyzed.
-
-    Returns:
-        A string, which should be the JSON analysis from the model.
     """
-    # Load the specific Gemini model we want to use.
     model = GenerativeModel("gemini-1.0-pro")
 
-    # This is our "Master Prompt". It's the most critical part.
-    # We instruct the AI on its role, the task, and the EXACT format.
     prompt = f"""
     You are an expert legal AI assistant. Your purpose is to demystify
     complex legal documents for the average person.
@@ -80,36 +74,71 @@ def analyze_document_with_gemini(document_text: str) -> str:
     ---
     """
 
-    # Send the combined prompt and document text to the model.
     response = model.generate_content(prompt)
-
-    # Return the text part of the model's response.
     return response.text
 
 
-# --- Step 4: Create the API Endpoints ---
+# --- TOOL 1: VAULT TOOL (Save to Firestore) ---
+def save_analysis_to_vault(user_id: str, analysis_data: dict) -> str:
+    """
+    Saves the analysis JSON to a Firestore collection for a specific user.
+    """
+    try:
+        # Path: users/{user_id}/analyses
+        collection_ref = db.collection('users', user_id, 'analyses')
 
+        # Add a new document with analysis data
+        update_time, doc_ref = collection_ref.add(analysis_data)
+
+        print(f"Analysis saved with Firestore ID: {doc_ref.id}")
+        return doc_ref.id
+    except Exception as e:
+        print(f"Error saving to Firestore: {e}")
+        return None
+
+
+# --- TOOL 2: CALENDAR TOOL (Create Google Calendar Event) ---
+def create_calendar_event(summary: str, description: str, event_date: str):
+    """
+    Creates an event in the user's Google Calendar.
+    Note: This requires OAuth2 authentication.
+    """
+    try:
+        SCOPES = ['https://www.googleapis.com/auth/calendar.events']
+
+        flow = Flow.from_client_secrets_file(
+            'client_secret.json',
+            scopes=SCOPES,
+            redirect_uri='http://localhost:5000/oauth2callback'
+        )
+
+        # 🚨 Placeholder for hackathon
+        print("Calendar tool called. In a full app, this would trigger user auth.")
+        return f"Placeholder: Event '{summary}' would be created for {event_date}."
+
+    except Exception as e:
+        print(f"Error creating calendar event: {e}")
+        return None
+
+
+# --- Step 4: Create the API Endpoints ---
 @app.route('/', methods=['GET'])
 def health_check():
-    """
-    Simple health check endpoint to confirm the backend is running.
-    """
+    """Simple health check endpoint."""
     return jsonify({
         "status": "healthy",
         "message": "CertifyAI backend is running."
     })
 
 
+# This is the main endpoint that our frontend will call.
 @app.route('/analyze', methods=['POST'])
 def analyze_endpoint():
     """
-    Receives document text, passes it to the Gemini function,
-    and returns the analysis.
+    Receives document text, passes it to Gemini,
+    saves the result to Firestore, and returns the analysis.
     """
-    # Get the JSON data sent from the frontend.
     data = request.get_json()
-
-    # Basic error handling
     if not data or 'text' not in data:
         return jsonify({
             "error": "Invalid request: 'text' field is missing."
@@ -117,20 +146,24 @@ def analyze_endpoint():
 
     document_text = data['text']
 
+    # Placeholder user_id (in real app, get from authentication)
+    user_id = "user_12345"
+
     try:
-        # Call our core function to get the analysis from Gemini.
         analysis_result_text = analyze_document_with_gemini(
             document_text
         )
-
-        # Convert model string output into JSON
         analysis_json = json.loads(analysis_result_text)
 
-        # Send the clean JSON object back to the frontend.
+        # --- USE THE VAULT TOOL ---
+        document_id = save_analysis_to_vault(user_id, analysis_json)
+
+        if document_id:
+            analysis_json['vault_document_id'] = document_id
+
         return jsonify(analysis_json)
 
     except Exception as e:
-        # Handle issues like malformed JSON or API failure
         print(f"An error occurred: {e}")
         return jsonify({
             "error": "Failed to analyze document.",
@@ -138,8 +171,25 @@ def analyze_endpoint():
         }), 500
 
 
+# Demo endpoint for Calendar Tool
+@app.route('/calendar-demo', methods=['POST'])
+def calendar_demo_endpoint():
+    """
+    Demo endpoint for Calendar tool.
+    Expects: {"summary": "...", "description": "...", "date": "YYYY-MM-DD"}
+    """
+    data = request.get_json()
+    if not data or not all(k in data for k in ("summary", "description", "date")):
+        return jsonify({
+            "error": "Invalid request: summary, description, and date required"
+        }), 400
+
+    result = create_calendar_event(
+        data["summary"], data["description"], data["date"]
+    )
+    return jsonify({"calendar_result": result})
+
+
 # --- Step 5: Run the Application ---
 if __name__ == '__main__':
-    # debug=True reloads the server when you save the file.
     app.run(debug=True, port=5000)
-
