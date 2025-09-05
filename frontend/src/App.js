@@ -112,7 +112,7 @@ function App() {
     formData.append('file', selectedFile);
 
     try {
-      const response = await fetch('http://localhost:5000/analyze-pdf', {
+      const response = await fetch('https://certify-ai-backend-15690670158.us-central1.run.app/analyze-pdf', {
         method: 'POST',
         body: formData,
       });
